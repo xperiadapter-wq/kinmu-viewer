@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>勤務表（スマホ表示）</title>
+<style>
+  :root{--bg:#f4f6f8;--ink:#222;--sub:#666;--line:#cfd8dc;}
+  @media (prefers-color-scheme: dark){:root{--bg:#15191c;--ink:#eceff1;--sub:#9aa5ab;--line:#37474f;}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Hiragino Sans","Yu Gothic",sans-serif;font-size:15px;}
+  header{padding:12px 14px 6px;}
+  h1{margin:0;font-size:18px;}
+  .sub{color:var(--sub);font-size:12px;margin-top:2px;}
+  .bar{display:flex;gap:8px;align-items:center;padding:6px 14px;flex-wrap:wrap;}
+  select{font-size:16px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:#fff;color:#222;}
+  .tabs{display:flex;gap:6px;}
+  .tab{font-size:14px;padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:#fff;color:#222;}
+  .tab.on{background:#1565c0;color:#fff;border-color:#1565c0;font-weight:bold;}
+  #err{margin:14px;padding:12px;background:#ffebee;color:#b71c1c;border-radius:8px;display:none;}
+  /* カレンダー */
+  .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;padding:6px 8px 10px;}
+  .dh{text-align:center;font-size:12px;font-weight:bold;padding:4px 0;}
+  .dh.sun{color:#c62828}.dh.sat{color:#1565c0}
+  .cell{min-height:64px;border-radius:8px;padding:3px 3px 4px;background:#fff;color:#222;border:1px solid var(--line);display:flex;flex-direction:column;align-items:center;justify-content:space-between;}
+  .cell .d{font-size:12px;align-self:flex-start;opacity:.8}
+  .cell .c{font-size:15px;font-weight:bold;text-align:center;line-height:1.15;word-break:keep-all;}
+  .cell.empty{background:transparent;border:none}
+  .cell.today{outline:3px solid #ff9800;}
+  /* 全員表 */
+  .wrap{overflow:auto;max-height:calc(100vh - 150px);margin:4px 0 14px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#fff;color:#222}
+  table{border-collapse:separate;border-spacing:0;font-size:13px;}
+  th,td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:4px 5px;text-align:center;white-space:nowrap;min-width:42px;}
+  thead th{position:sticky;top:0;background:#eceff1;z-index:2;font-size:12px;}
+  thead th.sun{color:#c62828;background:#ffebee}thead th.sat{color:#1565c0;background:#e3f2fd}
+  th.nm,td.nm{position:sticky;left:0;background:#eceff1;z-index:3;text-align:left;min-width:74px;font-weight:bold;}
+  thead th.nm{z-index:4}
+  tr.me td.nm{background:#ffe082}
+  td.today{box-shadow:inset 0 0 0 2px #ff9800}
+  .sum{padding:6px 14px;color:var(--sub);font-size:13px;line-height:1.7}
+  .legend{display:flex;flex-wrap:wrap;gap:4px;padding:4px 12px 16px;}
+  .legend span{font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--line);color:#222}
+  /* 勤務の色（アプリと同じ） */
+  .k当遅{background:#ffab91;font-weight:bold}.k明,.k代休{background:#fff59d;font-weight:bold}.k公{background:#e0e0e0;color:#777}
+  .k有給,.k有給AM,.k有給PM{background:#f0f4c3;font-weight:bold}.kRC日,.kRCmaru{background:#bbdefb}.kRC遅,.kRC遅2{background:#90caf9}
+  .kRCmaru,.kRC遅2,.kA2{font-weight:bold;text-decoration:underline}
+  .kF8{background:#d1c4e9}.kH4{background:#b2dfdb}.kF6{background:#c5e1a5}.kA勤{background:#ffe082}.k出張{background:#d7ccc8}.k希{background:#f8bbd0}
+</style>
+</head>
+<body>
+<header><h1 id="ttl">勤務表</h1><div class="sub" id="sub"></div></header>
+<div id="err"></div>
+<div class="bar" id="bar" style="display:none">
+  <div class="tabs"><button class="tab" id="tMine">自分の勤務</button><button class="tab on" id="tAll">全員の勤務表</button></div>
+  <select id="who"></select>
+</div>
+<div id="mine"></div>
+<div id="all" style="display:none"></div>
+<div class="sum" id="sumInfo"></div>
+<div class="legend" id="legend"></div>
+<script>
+// QRに入っているデータ（URLの # より後ろ）だけを使って表示する。サーバーには送られない。
+const CODES=['','HP','A2','A勤','RC日','RC遅','RC遅2','RCmaru','F8','H4','F6','当遅','明','代休','有給','有給AM','有給PM','公','希','出張'];
+const DISP={'当遅':'当(遅)','HP':'A','A勤':'A(土)','明':'代','代休':'代','有給':'有休','有給AM':'有休AM','有給PM':'有休PM','RC遅2':'RC遅*','RCmaru':'RC〇','A2':'A*'};
+const disp=c=>DISP[c]||c;
+const LEG=['HP','A2','RC日','RC遅','RCmaru','RC遅2','F8','H4','F6','当遅','A勤','出張','有給','明','公','希'];
+const DOW='日月火水木金土';
+const $=id=>document.getElementById(id);
+function b64urlDecode(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; const bin=atob(s); const u=Uint8Array.from(bin,c=>c.charCodeAt(0)); return new TextDecoder('utf-8').decode(u); }
+function parse(){
+  const h=location.hash.replace(/^#/,''); if(!h)throw new Error('データがありません。勤務表のQRコードを読み取ってください。');
+  const t=b64urlDecode(h).split('~');
+  if(t[0]!=='1')throw new Error('QRコードの形式が新しい（または古い）ようです。最新の勤務表アプリのQRを読み取ってください。');
+  const year=+t[1],month=+t[2],days=+t[3],hol=t[4];
+  const staff=t.slice(5).filter(Boolean).map(x=>{const i=x.indexOf(':');const name=x.slice(0,i),cells=x.slice(i+1);return {name,cells:[...cells].map(ch=>ch==='.'?'':(CODES[ch.charCodeAt(0)-97]||''))};});
+  return {year,month,days,hol,staff};
+}
+let D,who=0,mode='all';
+const today=new Date();
+const isToday=d=>today.getFullYear()===D.year&&today.getMonth()+1===D.month&&today.getDate()===d;
+const dowOf=d=>new Date(D.year,D.month-1,d).getDay();
+function renderMine(){
+  const p=D.staff[who]; let h='<div class="cal">';
+  for(let i=0;i<7;i++)h+=`<div class="dh ${i==0?'sun':i==6?'sat':''}">${DOW[i]}</div>`;
+  const first=dowOf(1); for(let i=0;i<first;i++)h+='<div class="cell empty"></div>';
+  for(let d=1;d<=D.days;d++){
+    const c=p.cells[d-1]||''; const holy=D.hol[d-1]==='1';
+    h+=`<div class="cell k${c} ${isToday(d)?'today':''}"><div class="d" style="${(dowOf(d)===0||holy)?'color:#c62828':dowOf(d)===6?'color:#1565c0':''}">${d}</div><div class="c">${c?disp(c):''}</div></div>`;
+  }
+  $('mine').innerHTML=h+'</div>';
+  const cnt={}; p.cells.forEach(c=>{ if(c)cnt[c]=(cnt[c]||0)+1; });
+  const yk=(cnt['有給']||0)+(cnt['有給AM']||0)+(cnt['有給PM']||0);
+  $('sumInfo').textContent=`${p.name}：公 ${cnt['公']||0}日 ／ 代 ${(cnt['明']||0)+(cnt['代休']||0)}日 ／ 有休 ${yk}日`;
+}
+function renderAll(){
+  let h='<div class="wrap"><table><thead><tr><th class="nm">名前</th>';
+  for(let d=1;d<=D.days;d++){const w=dowOf(d),holy=D.hol[d-1]==='1';h+=`<th class="${(w===0||holy)?'sun':w===6?'sat':''}">${d}<br>${DOW[w]}</th>`;}
+  h+='</tr></thead><tbody>';
+  D.staff.forEach((p,i)=>{ h+=`<tr class="${i===who?'me':''}"><td class="nm">${p.name}</td>`;
+    for(let d=1;d<=D.days;d++){const c=p.cells[d-1]||'';h+=`<td class="k${c} ${isToday(d)?'today':''}">${c?disp(c):''}</td>`;}
+    h+='</tr>'; });
+  $('all').innerHTML=h+'</tbody></table></div>';
+  $('sumInfo').textContent='横にスクロールすると日付が進みます。自分の行は黄色です。';
+}
+function render(){ $('mine').style.display=mode==='mine'?'block':'none'; $('all').style.display=mode==='all'?'block':'none'; $('tMine').classList.toggle('on',mode==='mine'); $('tAll').classList.toggle('on',mode==='all'); $('who').style.display=mode==='mine'||true?'inline-block':'none'; if(mode==='mine')renderMine(); else renderAll(); }
+try{
+  D=parse();
+  $('ttl').textContent=`${D.year}年${D.month}月 勤務表`; $('sub').textContent='※このQRを読み取った時点の内容です。変更があった場合は新しいQRを読み取ってください。';
+  const sel=$('who'); D.staff.forEach((p,i)=>{const o=document.createElement('option');o.value=i;o.textContent=p.name;sel.appendChild(o);});
+  try{ const sv=localStorage.getItem('kinmu_me'); if(sv!==null&&D.staff[+sv]){who=+sv;mode='mine';} }catch(e){}
+  sel.value=who; sel.onchange=()=>{who=+sel.value; try{localStorage.setItem('kinmu_me',who);}catch(e){} render();};
+  $('tMine').onclick=()=>{mode='mine';render();}; $('tAll').onclick=()=>{mode='all';render();};
+  $('bar').style.display='flex';
+  $('legend').innerHTML=LEG.map(c=>`<span class="k${c}">${disp(c)}</span>`).join('');
+  render();
+}catch(e){ $('err').style.display='block'; $('err').textContent=e.message; }
+</script>
+</body>
+</html>
