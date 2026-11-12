@@ -53,6 +53,7 @@
 <div class="bar" id="bar" style="display:none">
   <div class="tabs"><button class="tab" id="tMine">自分の勤務</button><button class="tab on" id="tAll">全員の勤務表</button></div>
   <select id="who"></select>
+  <button class="tab" id="btnPdfView">PDFを表示</button><button class="tab" id="btnPdfDl">PDFを保存</button>
 </div>
 <div id="mine"></div>
 <div id="all" style="display:none"></div>
@@ -70,10 +71,11 @@ function b64urlDecode(s){ s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.lengt
 function parse(){
   const h=location.hash.replace(/^#/,''); if(!h)throw new Error('データがありません。勤務表のQRコードを読み取ってください。');
   const t=b64urlDecode(h).split('~');
-  if(t[0]!=='1')throw new Error('QRコードの形式が新しい（または古い）ようです。最新の勤務表アプリのQRを読み取ってください。');
+  if(t[0]!=='1'&&t[0]!=='2')throw new Error('QRコードの形式が新しい（または古い）ようです。最新の勤務表アプリのQRを読み取ってください。');
   const year=+t[1],month=+t[2],days=+t[3],hol=t[4];
-  const staff=t.slice(5).filter(Boolean).map(x=>{const i=x.indexOf(':');const name=x.slice(0,i),cells=x.slice(i+1);return {name,cells:[...cells].map(ch=>ch==='.'?'':(CODES[ch.charCodeAt(0)-97]||''))};});
-  return {year,month,days,hol,staff};
+  const me=t[0]==='2'?+t[5]:-1;
+  const staff=t.slice(t[0]==='2'?6:5).filter(Boolean).map(x=>{const i=x.indexOf(':');const name=x.slice(0,i),cells=x.slice(i+1);return {name,cells:[...cells].map(ch=>ch==='.'?'':(CODES[ch.charCodeAt(0)-97]||''))};});
+  return {year,month,days,hol,staff,me};
 }
 let D,who=0,mode='all';
 const today=new Date();
@@ -102,12 +104,83 @@ function renderAll(){
   $('all').innerHTML=h+'</tbody></table></div>';
   $('sumInfo').textContent='横にスクロールすると日付が進みます。自分の行は黄色です。';
 }
-function render(){ $('mine').style.display=mode==='mine'?'block':'none'; $('all').style.display=mode==='all'?'block':'none'; $('tMine').classList.toggle('on',mode==='mine'); $('tAll').classList.toggle('on',mode==='all'); $('who').style.display=mode==='mine'||true?'inline-block':'none'; if(mode==='mine')renderMine(); else renderAll(); }
+function render(){ $('mine').style.display=mode==='mine'?'block':'none'; $('all').style.display=mode==='all'?'block':'none'; $('tMine').classList.toggle('on',mode==='mine'); $('tAll').classList.toggle('on',mode==='all'); $('who').style.display=(D.me>=0)?'none':'inline-block'; if(mode==='mine')renderMine(); else renderAll(); }
+
+// ===== PDF生成（スマホ内で作成。外部送信なし）=====
+const BG={'当遅':'#ffab91','明':'#fff59d','代休':'#fff59d','公':'#e0e0e0','有給':'#f0f4c3','有給AM':'#f0f4c3','有給PM':'#f0f4c3','RC日':'#bbdefb','RCmaru':'#bbdefb','RC遅':'#90caf9','RC遅2':'#90caf9','F8':'#d1c4e9','H4':'#b2dfdb','F6':'#c5e1a5','A勤':'#ffe082','出張':'#d7ccc8','希':'#f8bbd0'};
+const FONT='"Hiragino Sans","Yu Gothic","Noto Sans CJK JP","Noto Sans JP",sans-serif';
+const PW=2526,PH=1785; // A4横 (842x595pt) の3倍
+function newCanvas(){const c=document.createElement('canvas');c.width=PW;c.height=PH;const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,PW,PH);x.textBaseline='middle';return [c,x];}
+function cellBox(x,px,py,w,h,code,txt,opt){
+  opt=opt||{}; x.fillStyle=opt.bg||BG[code]||'#fff'; x.fillRect(px,py,w,h);
+  x.strokeStyle='#90a4ae'; x.lineWidth=1.5; x.strokeRect(px,py,w,h);
+  if(txt){ x.fillStyle=opt.color||(code==='公'?'#777':'#222'); x.font=(opt.bold||/^(RCmaru|RC遅2|A2|当遅|明|代休|有給|A勤)/.test(code)?'bold ':'')+(opt.size||26)+'px '+FONT; x.textAlign='center';
+    x.fillText(txt,px+w/2,py+h/2); if(/^(RCmaru|RC遅2|A2)$/.test(code)){const m=x.measureText(txt).width;x.fillRect(px+w/2-m/2,py+h/2+(opt.size||26)*0.55,m,2);} }
+}
+function pageAll(){
+  const [c,x]=newCanvas(); const mT=70,mL=50;
+  x.fillStyle='#222'; x.textAlign='left'; x.font='bold 44px '+FONT; x.fillText(`${D.year}年${D.month}月 勤務表`,mL,mT-10);
+  const n=D.days, nmW=150, top=mT+40, hdrH=70;
+  const cw=Math.floor((PW-mL*2-nmW)/n), rh=Math.min(92,Math.floor((PH-top-hdrH-230)/D.staff.length));
+  cellBox(x,mL,top,nmW,hdrH,'','名前',{bg:'#eceff1',bold:true,size:28});
+  for(let d=1;d<=n;d++){const w=dowOf(d),holy=D.hol[d-1]==='1';const col=(w===0||holy)?'#c62828':w===6?'#1565c0':'#222';
+    cellBox(x,mL+nmW+(d-1)*cw,top,cw,hdrH,'','',{bg:(w===0||holy)?'#ffebee':w===6?'#e3f2fd':'#eceff1'});
+    x.fillStyle=col;x.textAlign='center';x.font='bold 28px '+FONT;x.fillText(d,mL+nmW+(d-1)*cw+cw/2,top+24);x.font='22px '+FONT;x.fillText(DOW[w],mL+nmW+(d-1)*cw+cw/2,top+52);}
+  D.staff.forEach((p,i)=>{const y=top+hdrH+i*rh;
+    cellBox(x,mL,y,nmW,rh,'',p.name,{bg:i===who?'#ffe082':'#eceff1',bold:true,size:28});
+    for(let d=1;d<=n;d++){const code=p.cells[d-1]||'';cellBox(x,mL+nmW+(d-1)*cw,y,cw,rh,code,code?disp(code):'',{size:cw<66?22:26});}});
+  const ly=top+hdrH+D.staff.length*rh+50; let lx=mL; x.textAlign='left';
+  LEG.forEach(cd=>{const tx=disp(cd);x.font='24px '+FONT;const w=x.measureText(tx).width+30;cellBox(x,lx,ly,w,40,cd,'',{});x.fillStyle='#222';x.textAlign='center';x.fillText(tx,lx+w/2,ly+20);lx+=w+10;});
+  x.fillStyle='#666';x.textAlign='left';x.font='24px '+FONT;x.fillText('※QRコード読み取り時点の内容です。変更があった場合は新しいQRを読み取ってください。',mL,PH-40);
+  return c;
+}
+function pageMine(){
+  const [c,x]=newCanvas(); const p=D.staff[who],mL=60,mT=80;
+  x.fillStyle='#222';x.textAlign='left';x.font='bold 48px '+FONT;x.fillText(`${p.name}　${D.year}年${D.month}月 勤務`,mL,mT);
+  const first=dowOf(1), rows=Math.ceil((first+D.days)/7), top=mT+60, hdr=56, cw=Math.floor((PW-mL*2)/7), ch=Math.min(250,Math.floor((PH-top-hdr-190)/rows));
+  for(let i=0;i<7;i++){cellBox(x,mL+i*cw,top,cw,hdr,'','',{bg:i===0?'#ffebee':i===6?'#e3f2fd':'#eceff1'});x.fillStyle=i===0?'#c62828':i===6?'#1565c0':'#222';x.textAlign='center';x.font='bold 30px '+FONT;x.fillText(DOW[i],mL+i*cw+cw/2,top+hdr/2);}
+  for(let d=1;d<=D.days;d++){const idx=first+d-1,r=Math.floor(idx/7),col=idx%7,px=mL+col*cw,py=top+hdr+r*ch,code=p.cells[d-1]||'',holy=D.hol[d-1]==='1';
+    cellBox(x,px,py,cw,ch,code,'',{});
+    x.textAlign='left';x.font='bold 28px '+FONT;x.fillStyle=(col===0||holy)?'#c62828':col===6?'#1565c0':'#222';x.fillText(d,px+12,py+26);
+    if(code){x.textAlign='center';x.font='bold 50px '+FONT;x.fillStyle=code==='公'?'#777':'#222';x.fillText(disp(code),px+cw/2,py+ch*0.62);}}
+  const cnt={};p.cells.forEach(cd=>{if(cd)cnt[cd]=(cnt[cd]||0)+1;});const yk=(cnt['有給']||0)+(cnt['有給AM']||0)+(cnt['有給PM']||0);
+  x.fillStyle='#222';x.textAlign='left';x.font='28px '+FONT;x.fillText(`公 ${cnt['公']||0}日 ／ 代 ${(cnt['明']||0)+(cnt['代休']||0)}日 ／ 有休 ${yk}日`,mL,PH-90);
+  x.fillStyle='#666';x.font='22px '+FONT;x.fillText('※QRコード読み取り時点の内容です。変更があった場合は新しいQRを読み取ってください。',mL,PH-45);
+  return c;
+}
+function makePdf(canvases){
+  const enc=new TextEncoder(),parts=[],offs=[];let len=0;
+  const push=u=>{parts.push(u);len+=u.length;};
+  const str=s=>push(enc.encode(s));
+  const objStart=()=>offs.push(len);
+  str('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  const n=canvases.length;
+  objStart();str('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  objStart();str('2 0 obj\n<< /Type /Pages /Kids ['+canvases.map((_,i)=>(3+i*3)+' 0 R').join(' ')+'] /Count '+n+' >>\nendobj\n');
+  canvases.forEach((cv,i)=>{
+    const b=3+i*3;
+    const data=atob(cv.toDataURL('image/jpeg',0.92).split(',')[1]);const jpg=Uint8Array.from(data,ch=>ch.charCodeAt(0));
+    objStart();str(`${b} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /XObject << /Im0 ${b+2} 0 R >> >> /Contents ${b+1} 0 R >>\nendobj\n`);
+    const cs='q 842 0 0 595 0 0 cm /Im0 Do Q';
+    objStart();str(`${b+1} 0 obj\n<< /Length ${cs.length} >>\nstream\n${cs}\nendstream\nendobj\n`);
+    objStart();str(`${b+2} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${cv.width} /Height ${cv.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpg.length} >>\nstream\n`);push(jpg);str('\nendstream\nendobj\n');
+  });
+  const xr=len,total=offs.length+1;
+  str(`xref\n0 ${total}\n0000000000 65535 f \n`+offs.map(o=>String(o).padStart(10,'0')+' 00000 n \n').join(''));
+  str(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xr}\n%%EOF\n`);
+  const out=new Uint8Array(len);let p=0;parts.forEach(u=>{out.set(u,p);p+=u.length;});
+  return new Blob([out],{type:'application/pdf'});
+}
+function pdfBlob(){ return makePdf([pageAll(),pageMine()]); }
+function pdfName(){ return `勤務表_${D.year}年${D.month}月_${D.staff[who].name.replace(/^[^぀-鿿]*/,'')}.pdf`; }
+$('btnPdfDl').onclick=()=>{ try{ const u=URL.createObjectURL(pdfBlob()); const a=document.createElement('a'); a.href=u; a.download=pdfName(); document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u),60000);}catch(e){alert('PDFの作成に失敗しました：'+e.message);} };
+$('btnPdfView').onclick=()=>{ try{ const u=URL.createObjectURL(pdfBlob()); const w=window.open(u,'_blank'); if(!w)location.href=u; }catch(e){alert('PDFの作成に失敗しました：'+e.message);} };
 try{
   D=parse();
   $('ttl').textContent=`${D.year}年${D.month}月 勤務表`; $('sub').textContent='※このQRを読み取った時点の内容です。変更があった場合は新しいQRを読み取ってください。';
   const sel=$('who'); D.staff.forEach((p,i)=>{const o=document.createElement('option');o.value=i;o.textContent=p.name;sel.appendChild(o);});
   try{ const sv=localStorage.getItem('kinmu_me'); if(sv!==null&&D.staff[+sv]){who=+sv;mode='mine';} }catch(e){}
+  if(D.me>=0&&D.staff[D.me]){who=D.me;mode='mine';}
   sel.value=who; sel.onchange=()=>{who=+sel.value; try{localStorage.setItem('kinmu_me',who);}catch(e){} render();};
   $('tMine').onclick=()=>{mode='mine';render();}; $('tAll').onclick=()=>{mode='all';render();};
   $('bar').style.display='flex';
